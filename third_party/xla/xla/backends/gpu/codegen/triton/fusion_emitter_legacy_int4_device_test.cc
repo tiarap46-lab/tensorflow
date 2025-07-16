@@ -104,23 +104,36 @@ TEST_F(TritonTest, DotForInt4vsIdentityBF16ReturnsCorrectResult) {
         rhs_contracting_dims={0}
     }
   )";
-  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(kHloText));
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kHloText));
+  TF_ASSERT_OK_AND_ASSIGN(module, GetOptimizedModule(std::move(module)));
+
+  // We check that conversion was fused into gemm fusion.
+  EXPECT_TRUE(*RunFileCheck(module->ToString(), R"(
+    CHECK:  %[[weight_s4:.*]] = s4[32,32]{1,0:E(4)} parameter(0)
+    CHECK:  %[[weight_s8:.*]] = s8[32,32]{1,0} convert(%[[weight_s4]])
+    CHECK:  %[[weight_b16:.*]] = bf16[32,32]{1,0} convert(%[[weight_s8]])
+    CHECK:  %[[a_f32:.*]] = f32[32,32]{1,0} parameter(1)
+    CHECK:  %[[a_bf16:.*]] = bf16[32,32]{1,0} convert(%[[a_f32]])
+    CHECK:  ROOT %[[dot:.*]] = f32[32,32]{1,0} dot(%[[weight_b16]], %[[a_bf16]])
+  )"));
+
   TF_ASSERT_OK_AND_ASSIGN(auto lhs,
                           (LiteralUtil::CreateLiteralWithGenerator<S4, s4>(
                               ShapeUtil::MakeShape(S4, {32, 32}),
                               [](absl::Span<const int64_t> indices) {
                                 return static_cast<s4>(indices[0] % 16 - 8);
                               })));
-  // LHS is a int4 matrix with a clear pattern.
-  // RHS is a constant identity matrix.
-  // The result is a matrix with a clear pattern.
   TF_ASSERT_OK_AND_ASSIGN(auto rhs,
                           (LiteralUtil::CreateLiteralWithGenerator<F32, float>(
                               ShapeUtil::MakeShape(F32, {32, 32}),
                               [](absl::Span<const int64_t> indices) {
                                 return indices[0] == indices[1] ? 1.0f : 0.0f;
                               })));
-  EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), {&lhs, &rhs}, {}));
+  // LHS is a int4 matrix with a clear pattern.
+  // RHS is a constant identity matrix.
+  // The result is a matrix with a clear pattern.
+  EXPECT_TRUE(RunAndCompare(std::move(module), {&lhs, &rhs}, {}));
 }
 
 // The following tests are for the channel and subchannel dequantization
