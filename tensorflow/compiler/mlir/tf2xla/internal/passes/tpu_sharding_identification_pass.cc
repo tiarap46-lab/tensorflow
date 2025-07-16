@@ -182,9 +182,15 @@ mlir::Operation* GetXlaShardingFromOperand(Value value) {
 std::optional<StringRef> GetXlaShardingFromOperator(mlir::Operation* op) {
   if (auto partitioned_output =
           llvm::dyn_cast<mlir::TF::TPUPartitionedOutputV2Op>(op)) {
+    if (partitioned_output.get_XlaShardingV2().has_value()) {
+      return partitioned_output.get_XlaShardingV2();
+    }
     return partitioned_output.get_XlaSharding();
   } else if (auto partitioned_input =
                  llvm::dyn_cast<mlir::TF::TPUPartitionedInputV2Op>(op)) {
+    if (partitioned_input.get_XlaShardingV2().has_value()) {
+      return partitioned_input.get_XlaShardingV2();
+    }
     return partitioned_input.get_XlaSharding();
   } else {
     return std::nullopt;
@@ -526,6 +532,10 @@ absl::StatusOr<std::optional<StringRef>> GetXlaShardingFromRetval(
 
     if (auto sharding = llvm::dyn_cast_or_null<mlir::TF::XlaShardingOp>(def))
       return GetXlaShardingFromShardingOp(sharding);
+
+    if (auto sharding = def->getAttrOfType<StringAttr>("_XlaShardingV2")) {
+      return sharding.strref();
+    }
 
     if (auto sharding = def->getAttrOfType<StringAttr>("_XlaSharding")) {
       return sharding.strref();

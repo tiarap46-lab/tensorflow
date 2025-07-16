@@ -14,6 +14,8 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/tf2xla/sharding_util.h"
 
+#include <utility>
+
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
@@ -180,36 +182,28 @@ absl::StatusOr<std::optional<xla::OpSharding>> GetShardingFromNodeDefInternal(
 
 absl::StatusOr<std::optional<xla::OpSharding>> GetShardingFromNodeDef(
     const NodeDef& node_def, bool add_metadata) {
+  // kShardingOpAttribute is only defined for 'XlaSharding' op
+  const char* primary_sharding_attribute = (node_def.op() == "XlaSharding")
+                                               ? kShardingOpAttribute
+                                               : kShardingAttribute;
   TF_ASSIGN_OR_RETURN(auto sharding_attribute,
-                      GetShardingFromNodeDefInternal(node_def, add_metadata,
-                                                     kShardingAttribute));
-
-  if (node_def.op() != "XlaSharding") {
-    return sharding_attribute;
-  }
-
-  TF_ASSIGN_OR_RETURN(auto sharding_op_attribute,
-                      GetShardingFromNodeDefInternal(node_def, add_metadata,
-                                                     kShardingOpAttribute));
-  if (!sharding_op_attribute.has_value()) {
-    return sharding_attribute;
-  }
-
+                      GetShardingFromNodeDefInternal(
+                          node_def, add_metadata, primary_sharding_attribute));
   TF_ASSIGN_OR_RETURN(auto shardingv2,
                       GetShardingFromNodeDefInternal(node_def, add_metadata,
                                                      kShardingAttributeV2));
 
   if (!shardingv2.has_value()) {
-    return sharding_op_attribute;
+    return sharding_attribute;
   }
 
-  if (tensorflow::VerifyShardingEquivalent(sharding_op_attribute.value(),
+  if (tensorflow::VerifyShardingEquivalent(sharding_attribute.value(),
                                            shardingv2.value())
           .failed()) {
     return absl::InvalidArgumentError(absl::StrCat(
         "XlaSharding attribute was not equivalent to XlaShardingV2 "
         "attribute: ",
-        sharding_op_attribute.value().DebugString(), " vs ",
+        sharding_attribute.value().DebugString(), " vs ",
         shardingv2.value().DebugString()));
   }
   return shardingv2;
