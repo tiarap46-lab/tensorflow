@@ -46,8 +46,6 @@ namespace {
 std::string GetDotDumpDir(std::string dot_graph_dump_to) {
   if (dot_graph_dump_to == "sponge") {
     if (!tsl::io::GetTestUndeclaredOutputsDir(&dot_graph_dump_to)) {
-      LOG(ERROR) << "compile option `dot_graph_dump_to=sponge` is specified "
-                    "outside of a test; ignoring the value";
       return "";
     }
   }
