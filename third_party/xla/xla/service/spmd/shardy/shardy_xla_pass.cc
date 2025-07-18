@@ -330,6 +330,8 @@ absl::Status runShardingPropagation(HloModule* hloModule,
   }
 
   if (!shardyDir.empty()) {
+    options.debugPropagationEdgeSharding = true;
+    options.debugShardingOrigins = true;
     shardyDir =
         tsl::io::JoinPath(shardyDir, "shardy", uniqueModuleName(*hloModule));
     LOG(INFO) << "Using Shardy output directory: " << shardyDir;
