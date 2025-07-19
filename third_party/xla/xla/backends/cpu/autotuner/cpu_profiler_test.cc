@@ -19,6 +19,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -65,17 +66,17 @@ TEST_F(CpuProfilerTest, ProfileWithSharedBuffers) {
                           CompileHloModule(std::move(hlo_module)));
 
   auto profiler = CpuProfiler::Create(ProfileOptions());
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::vector<ProfileResult> profiles,
-      profiler->ProfileWithSharedBuffers(std::move(executables)));
+  TF_ASSERT_OK_AND_ASSIGN(auto profiles, profiler->ProfileWithSharedBuffers(
+                                             std::move(executables)));
 
   // We expect only one profile because we only have one executable.
   EXPECT_EQ(profiles.size(), 1);
+  EXPECT_OK(profiles[0].status());
 }
 
 TEST_F(CpuProfilerTest, ProfileWithSharedBuffersWithoutExecutable) {
   auto profiler = CpuProfiler::Create(ProfileOptions());
-  TF_ASSERT_OK_AND_ASSIGN(std::vector<ProfileResult> profiles,
+  TF_ASSERT_OK_AND_ASSIGN(auto profiles,
                           profiler->ProfileWithSharedBuffers({}));
 
   // No executable means no profiles.

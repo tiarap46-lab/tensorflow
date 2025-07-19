@@ -22,6 +22,7 @@ limitations under the License.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
@@ -47,11 +48,17 @@ using ::testing::Field;
 
 class MockExecutable : public Executable {
  public:
-  explicit MockExecutable(std::shared_ptr<HloModule> module, int duration_ns)
-      : Executable(module), duration_ns_(duration_ns) {}
+  explicit MockExecutable(std::shared_ptr<HloModule> module, int duration_ns,
+                          bool should_fail = false)
+      : Executable(module),
+        duration_ns_(duration_ns),
+        should_fail_(should_fail) {}
   absl::StatusOr<ExecutionOutput> ExecuteAsyncOnStream(
       const ServiceExecutableRunOptions* run_options,
       std::vector<ExecutionInput> arguments) override {
+    if (should_fail_) {
+      return absl::InternalError("MockExecutable failed as requested.");
+    }
     ExecutionProfile* profile = run_options->run_options().execution_profile();
     if (profile != nullptr) {
       profile->set_compute_time_ns(duration_ns_);
@@ -64,6 +71,7 @@ class MockExecutable : public Executable {
 
  private:
   int duration_ns_;
+  bool should_fail_;
 };
 
 class GpuProfilerTest : public HloHardwareIndependentTestBase {
@@ -91,13 +99,43 @@ TEST_F(GpuProfilerTest, ProfileWithSharedBuffers) {
   executables.push_back(std::make_unique<MockExecutable>(module, 2000));
 
   auto profiler = GpuProfiler::Create(stream_exec_, ProfileOptions());
-  TF_ASSERT_OK_AND_ASSIGN(
-      std::vector<ProfileResult> profiles,
-      profiler->ProfileWithSharedBuffers(std::move(executables)));
+  TF_ASSERT_OK_AND_ASSIGN(auto profiles, profiler->ProfileWithSharedBuffers(
+                                             std::move(executables)));
+  EXPECT_EQ(profiles.size(), 2);
+  ASSERT_OK(profiles[0].status());
+  ASSERT_OK(profiles[1].status());
   EXPECT_THAT(
-      profiles,
+      std::vector<ProfileResult>({profiles[0].value(), profiles[1].value()}),
       ElementsAre(Field(&ProfileResult::duration, absl::Nanoseconds(1000)),
                   Field(&ProfileResult::duration, absl::Nanoseconds(2000))));
+}
+
+TEST_F(GpuProfilerTest, FailingExecutablesReturnStatus) {
+  constexpr absl::string_view kHloModule = R"(
+    HloModule module
+    ENTRY main {
+      ROOT c = s32[] constant(1)
+    }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(std::shared_ptr<HloModule> module,
+                          ParseAndReturnVerifiedModule(kHloModule));
+  std::vector<std::unique_ptr<Executable>> executables;
+  executables.push_back(std::make_unique<MockExecutable>(module, 1000));
+  executables.push_back(
+      std::make_unique<MockExecutable>(module, 2000, /*should_fail=*/true));
+  executables.push_back(std::make_unique<MockExecutable>(module, 3000));
+
+  auto profiler = GpuProfiler::Create(stream_exec_, ProfileOptions());
+  TF_ASSERT_OK_AND_ASSIGN(auto profiles, profiler->ProfileWithSharedBuffers(
+                                             std::move(executables)));
+  EXPECT_EQ(profiles.size(), 3);
+  ASSERT_OK(profiles[0].status());
+  EXPECT_FALSE(profiles[1].ok());
+  ASSERT_OK(profiles[2].status());
+  EXPECT_THAT(
+      std::vector<ProfileResult>({profiles[0].value(), profiles[2].value()}),
+      ElementsAre(Field(&ProfileResult::duration, absl::Nanoseconds(1000)),
+                  Field(&ProfileResult::duration, absl::Nanoseconds(3000))));
 }
 
 }  // namespace

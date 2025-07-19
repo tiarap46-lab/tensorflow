@@ -1733,10 +1733,13 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
   // f32).
   add_float_normalization(pipeline);
 
-  TF_RETURN_IF_ERROR(AddGemmFusionAutotuningPasses(
-      &pipeline, hlo_module, autotune_config, thread_pool,
-      options.key_value_store,
-      gpu_target_config.device_description.runtime_version(), stream_exec));
+  // Autotuning requires a device, so skip if stream_exec is null.
+  if (stream_exec != nullptr) {
+    TF_RETURN_IF_ERROR(AddGemmFusionAutotuningPasses(
+        &pipeline, hlo_module, autotune_config, thread_pool,
+        options.key_value_store,
+        gpu_target_config.device_description.runtime_version(), stream_exec));
+  }
 
   // Inline back the calls which have better performance with cuBLAS.
   pipeline.AddPass<CallInliner>(
@@ -1766,9 +1769,12 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
 
   pipeline.AddPass<HostOffloader>(alias_info);
 
-  TF_RETURN_IF_ERROR(
-      AddConvAndGemmAutotuningPasses(&pipeline, gpu_version, options,
-                                     hlo_module, autotune_config, thread_pool));
+  // Autotuning requires a device, so skip if stream_exec is null.
+  if (stream_exec != nullptr) {
+    TF_RETURN_IF_ERROR(AddConvAndGemmAutotuningPasses(
+        &pipeline, gpu_version, options, hlo_module, autotune_config,
+        thread_pool, stream_exec));
+  }
 
   // The GEMM fusion autotuner can insert new bf16 reductions that need to be
   // normalized again.
