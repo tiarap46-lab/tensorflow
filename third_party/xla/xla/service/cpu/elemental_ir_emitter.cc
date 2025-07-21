@@ -26,6 +26,7 @@ limitations under the License.
 #include "llvm/IR/Value.h"
 #include "xla/codegen/math/exp.h"
 #include "xla/codegen/math/intrinsic.h"
+#include "xla/codegen/math/rsqrt.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/service/cpu/elemental_math_emitter.h"
 #include "xla/service/llvm_ir/llvm_util.h"
@@ -60,6 +61,14 @@ absl::StatusOr<llvm::Value*> CpuElementalIrEmitter::EmitExp(
   }
   return llvm_ir::EmitCallToIntrinsic(llvm::Intrinsic::exp, {value},
                                       {value->getType()}, b(), name);
+}
+
+absl::StatusOr<llvm::Value*> CpuElementalIrEmitter::EmitRsqrt(
+    PrimitiveType prim_type, llvm::Value* value) {
+  llvm::Function* rsqrt_fn =
+      xla::codegen::intrinsics::Rsqrt::GetOrInsertDeclaration(
+          module(), Type::S(prim_type));
+  return b()->CreateCall(rsqrt_fn, value);
 }
 
 absl::StatusOr<std::vector<llvm::Value*>>

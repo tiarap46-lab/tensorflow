@@ -16,11 +16,13 @@ limitations under the License.
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/log/log.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/IR/BasicBlock.h"
@@ -69,8 +71,11 @@ void AddOneOverSqrt(llvm::LLVMContext& context, llvm::Module& module,
 JitRunner CreateJitRunnerWithRsqrt(Type type) {
   auto context = std::make_unique<llvm::LLVMContext>();
   auto module = std::make_unique<llvm::Module>("test_module", *context);
+
+  std::unique_ptr<llvm::TargetMachine> target_machine =
+      xla::codegen::math::CreateHostTargetMachine();
   llvm::Function* rsqrt_func =
-      Rsqrt::CreateDefinition(module.get(), type).value();
+      Rsqrt::CreateDefinition(module.get(), target_machine.get(), type).value();
   rsqrt_func->setLinkage(llvm::Function::ExternalLinkage);
   EXPECT_FALSE(llvm::verifyFunction(*rsqrt_func));
 
@@ -183,6 +188,17 @@ TEST(RsqrtTest, EmitRsqrtF32_EdgeCases) {
     float actual_small = rsqrt(small_val);
     float expected_small = 1.0f / std::sqrt(small_val);
     EXPECT_THAT(actual_small, NearUlps<float>(expected_small, 1));
+  }
+}
+
+TEST(RsqrtTest, EmitRsqrtF64) {
+  if (isX86()) {
+    Type type = Type::S(F64);
+    JitRunner jit = CreateJitRunnerWithRsqrt(type);
+    auto rsqrt = jit.GetScalarFn<float(float)>(Rsqrt::Name(type));
+    auto one_over_sqrt = jit.GetScalarFn<float(float)>("one_over_sqrt");
+
+    EXPECT_THAT(rsqrt(1234.0), NearUlps<float>(one_over_sqrt(1234.0), 1));
   }
 }
 

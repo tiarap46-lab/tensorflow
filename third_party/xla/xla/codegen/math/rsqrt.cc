@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/codegen/math/rsqrt.h"
 
 #include <cstddef>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -38,8 +39,8 @@ limitations under the License.
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/TypeSize.h"
+#include "llvm/Target/TargetMachine.h"
 #include "xla/codegen/math/intrinsic.h"
-#include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla::codegen::intrinsics {
@@ -68,19 +69,19 @@ static llvm::Value* NewtonRaphsonRsqrtIteration(llvm::IRBuilder<>& builder,
 
 struct RsqrtIntrinsic {
   llvm::Intrinsic::ID id;
-  int mask_bits;  // Some avx512 calls require masks.
-  bool needs_insert_element;
+  int mask_bits;                  // Some avx512 calls require masks.
+  int needs_insert_element_size;  // Some avx512 calls require padding.
 
   static RsqrtIntrinsic ForF32(size_t num_elements) {
     switch (num_elements) {
       case 1:
-        return {llvm::Intrinsic::x86_sse_rsqrt_ss, 0, true};
+        return {llvm::Intrinsic::x86_sse_rsqrt_ss, 0, 4};
       case 4:
-        return {llvm::Intrinsic::x86_sse_rsqrt_ps, 0, false};
+        return {llvm::Intrinsic::x86_sse_rsqrt_ps, 0, 0};
       case 8:
-        return {llvm::Intrinsic::x86_avx_rsqrt_ps_256, 0, false};
+        return {llvm::Intrinsic::x86_avx_rsqrt_ps_256, 0, 0};
       case 16:
-        return {llvm::Intrinsic::x86_avx512_rsqrt14_ps_512, 16, false};
+        return {llvm::Intrinsic::x86_avx512_rsqrt14_ps_512, 16, 0};
       default:
         LOG(FATAL) << "Unsupported vector width for rsqrt: " << num_elements;
     }
@@ -89,12 +90,18 @@ struct RsqrtIntrinsic {
   static RsqrtIntrinsic ForF64(size_t num_elements) {
     // We assume AVX512 is available for F64.
     switch (num_elements) {
+      case 1:
+        // Assuming AVX512 is available.
+        // We don't use x86_avx512_rsqrt14_sd because it also requires padding
+        // into <2 x double> vectors and it takes an additional source vector
+        // for the upper bits of the result.
+        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_128, 8, 2};
       case 2:
-        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_128, 8, false};
+        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_128, 8, 0};
       case 4:
-        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_256, 8, false};
+        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_256, 8, 0};
       case 8:
-        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_512, 8, false};
+        return {llvm::Intrinsic::x86_avx512_rsqrt14_pd_512, 8, 0};
       default:
         LOG(FATAL) << "Unsupported vector width for rsqrt: " << num_elements;
     }
@@ -106,31 +113,35 @@ struct RsqrtIntrinsic {
         llvm::Intrinsic::getOrInsertDeclaration(module, id);
 
     llvm::Value* y_approx;
-    if (needs_insert_element) {
+    std::vector<llvm::Value*> args = {x};
+    if (needs_insert_element_size > 0) {
+      // Pad into a vector of size `needs_insert_element_size`.
       llvm::Type* sse_vec_type = llvm::VectorType::get(
-          x->getType()->getScalarType(), llvm::ElementCount::getFixed(4));
+          x->getType()->getScalarType(),
+          llvm::ElementCount::getFixed(needs_insert_element_size));
       llvm::Value* vec_x = llvm::UndefValue::get(sse_vec_type);
       vec_x = builder.CreateInsertElement(vec_x, x, builder.getInt32(0));
-      llvm::Value* approx_vec =
-          builder.CreateCall(rsqrt_intrinsic, {vec_x}, "y_approx.vec");
-      y_approx = builder.CreateExtractElement(approx_vec, builder.getInt32(0),
-                                              "y_approx");
-    } else if (mask_bits > 0) {
-      llvm::Value* dest = llvm::ConstantFP::get(x->getType(), 0.0);
+      args[0] = vec_x;
+    }
+    if (mask_bits > 0) {
+      llvm::Value* src = llvm::ConstantFP::get(args[0]->getType(), 0.0);
       llvm::Value* mask = llvm::ConstantInt::get(
           builder.getContext(), llvm::APInt(mask_bits, -1, true));
-      y_approx =
-          builder.CreateCall(rsqrt_intrinsic, {x, dest, mask}, "y_approx");
-
-    } else {
-      y_approx = builder.CreateCall(rsqrt_intrinsic, {x}, "y_approx");
+      args.push_back(src);
+      args.push_back(mask);
+    }
+    y_approx = builder.CreateCall(rsqrt_intrinsic, args, "y_approx");
+    if (needs_insert_element_size > 0) {
+      // Extract the result from the padded vector.
+      y_approx = builder.CreateExtractElement(y_approx, builder.getInt32(0),
+                                              "y_approx");
     }
     return y_approx;
   }
 };
 
-absl::StatusOr<llvm::Function*> Rsqrt::CreateDefinition(llvm::Module* module,
-                                                        Type type) {
+absl::StatusOr<llvm::Function*> Rsqrt::CreateDefinition(
+    llvm::Module* module, llvm::TargetMachine* target_machine, Type type) {
   llvm::Type* input_type = Type::TypeToIrType(type, module->getContext());
   CHECK(input_type != nullptr);
   CHECK(input_type->isFloatingPointTy() || input_type->isVectorTy());
@@ -156,6 +167,21 @@ absl::StatusOr<llvm::Function*> Rsqrt::CreateDefinition(llvm::Module* module,
   llvm::BasicBlock* entry_bb = llvm::BasicBlock::Create(context, "entry", func);
   llvm::Value* x = input_x_arg;
   builder.SetInsertPoint(entry_bb);
+
+  if ((type.element_type() == F64 &&
+       !target_machine->getTargetFeatureString().contains("+avx512f")) ||
+      !target_machine->getTargetFeatureString().contains("+avx")) {
+    // We can't use the same approximation algorithm for F64 without AVX512 or
+    // anything non-x86 and without avx.
+    // Fall back to 1 / sqrt(x).
+    llvm::Value* one = llvm::ConstantFP::get(input_type, 1.0);
+    llvm::Value* sqrt_x =
+        builder.CreateUnaryIntrinsic(llvm::Intrinsic::sqrt, x);
+    llvm::Value* inv_sqrt_x = builder.CreateFDiv(one, sqrt_x, "inv_sqrt_x");
+    builder.CreateRet(inv_sqrt_x);
+    return func;
+  }
+
   RsqrtIntrinsic rsqrt_intrinsic = input_type->getScalarType()->isFloatTy()
                                        ? RsqrtIntrinsic::ForF32(num_elements)
                                        : RsqrtIntrinsic::ForF64(num_elements);
