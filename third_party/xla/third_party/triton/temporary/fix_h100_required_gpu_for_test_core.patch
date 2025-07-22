@@ -1,0 +1,14 @@
+b/433429549: Temporary patch to fix the required gpu for test_core in BUILD file.
+
+diff --git a/python/test/BUILD b/python/test/BUILD
+--- a/python/test/BUILD
++++ b/python/test/BUILD
+@@ -112,7 +112,7 @@ pytest_test(
+         "conftest.py",
+     ],
+     shard_count = 40,
+-    tags = _requires_gpu_sm80,
++    tags = _requires_gpu_sm90,
+     target_compatible_with = _requires_config_cuda,
+     tests = ["unit/language/test_core.py"],
+     deps = [
