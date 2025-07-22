@@ -77,6 +77,8 @@ class GpuCodegenBackend : public CodegenBackend {
                                  options);
   }
 
+  bool CanProduceIncorrectOutput() const override { return false; }
+
  private:
   // Optimize the HLO module.
   // TODO(b/407494653): Remove this when XLA pipelines is fixed and we autotune
