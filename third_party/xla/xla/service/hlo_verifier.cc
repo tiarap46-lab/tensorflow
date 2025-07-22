@@ -3596,9 +3596,9 @@ absl::StatusOr<bool> HloVerifier::Run(
     // If the module has a schedule, it must be valid.
     if (module->has_schedule()) {
       TF_RETURN_IF_ERROR(module->schedule().Verify());
-      if (target_metadata_->GetVerifierOpts().CheckForCollectiveDeadlocks()) {
-        TF_RETURN_IF_ERROR(VerifyNoCollectiveDeadlocks(*module));
-      }
+    }
+    if (target_metadata_->GetVerifierOpts().CheckForCollectiveDeadlocks()) {
+      TF_RETURN_IF_ERROR(VerifyNoCollectiveDeadlocks(*module));
     }
 
     if (HloInstruction::IsThreadIncluded(

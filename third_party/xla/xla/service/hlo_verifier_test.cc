@@ -4360,31 +4360,6 @@ TEST_F(HloVerifierTest, VerifyBuffersRotatedChain) {
   ASSERT_TRUE(status.ok());
 }
 
-TEST_F(HloVerifierTestForCollectiveDeadlocks,
-       VerifySendRecvDeadlockNotCheckedOnUnscheduledModule) {
-  const char* const hlo = R"(
-  HloModule module
-
-  ENTRY test_computation {
-    c0 = f32[] constant(0)
-    after_all = token[] after-all()
-    send1 = (f32[], u32[], token[]) send(c0, after_all), channel_id=1,
-          frontend_attributes={
-            _xla_send_recv_source_target_pairs="{{0,1},{1,2}}"}
-    send1-done = token[] send-done(send1), channel_id=1
-    recv1 = (f32[], u32[], token[]) recv(after_all), channel_id=1,
-          frontend_attributes={
-            _xla_send_recv_source_target_pairs="{{0,1},{2,3}}"}
-    recv1-done = (f32[], token[]) recv-done(recv1), channel_id=1
-    p0 = f32[10] parameter(0)
-    p1 = bf16[10] parameter(1)
-    ROOT ag = (f32[20], bf16[20]) all-gather(p0, p1), dimensions={0}
-  })";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<xla::HloModule> module,
-                          ParseAndReturnUnverifiedModule(hlo));
-  EXPECT_THAT(verifier().Run(module.get()), IsOkAndHolds(false));
-}
-
 TEST_F(HloVerifierTestForCollectiveDeadlocks, VerifySendRecvDeadlockOnRecv) {
   const char* const hlo = R"(
   HloModule module, is_scheduled=true
