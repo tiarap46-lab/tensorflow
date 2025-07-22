@@ -4087,6 +4087,8 @@ ENTRY %reshape {
               op::Tuple(reshape_1, abs));
 }
 
+// TODO(b/397731516). We can add a reshard cache for the reshape such that we
+// can avoid the reshard (dynamic-slice) on reshape.
 TEST_P(SpmdPartitioningTest, ReshapeWithSpecialCache2) {
   absl::string_view hlo_string = R"(
 HloModule module
@@ -4105,11 +4107,12 @@ ENTRY %reshape {
   auto param_replicated = AllOf(
       op::Shape("bf16[8,8]"), op::AllReduce(op::DynamicUpdateSlice(
                                   op::Broadcast(op::Constant()), param, _, _)));
-  auto reshape_1 = AllOf(op::Shape("bf16[64]"), op::Reshape(param_replicated));
-  auto reshape_2 = AllOf(op::Shape("bf16[16]"), op::Reshape(param));
-  auto abs = AllOf(op::Shape("bf16[16]"), op::Abs(reshape_2));
+  auto reshape = AllOf(op::Shape("bf16[64]"), op::Reshape(param_replicated));
+  auto reshape_resharded =
+      AllOf(op::Shape("bf16[16]"), op::DynamicSlice(reshape, _));
+  auto abs = AllOf(op::Shape("bf16[16]"), op::Abs(reshape_resharded));
   EXPECT_THAT(module->entry_computation()->root_instruction(),
-              op::Tuple(reshape_1, abs));
+              op::Tuple(reshape, abs));
 }
 
 TEST_P(SpmdPartitioningTest, PartialReplicateShardableReshape) {
